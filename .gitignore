@@ -1,0 +1,8 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/BookingBotAPI/obj
+/.vs
+/BookingBotAPI/bin/Debug/net8.0
+/BookingBotAPI/appsettings.json
