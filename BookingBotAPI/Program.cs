@@ -1,86 +1,108 @@
 using BookingBotAPI.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
+using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
-using Telegram.Bot.Exceptions;
-using System.Threading.Tasks;
-using System.Threading;
 
-var builder = WebApplication.CreateBuilder(args);
+public class Program
+{
+    public static async Task Main(string[] args)
+    {
+        var builder = Host.CreateDefaultBuilder(args)
+            .ConfigureServices((context, services) =>
+            {
+                services.AddDbContext<BookingBotDbContext>(options =>
+                    options.UseNpgsql(context.Configuration.GetConnectionString("DefaultConnection")));
 
-// Add services to the container.
-builder.Services.AddDbContext<BookingBotDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+                string telegramBotToken = context.Configuration["TelegramBotToken"];
+                services.AddSingleton(new TelegramBotClient(telegramBotToken));
 
-// Add other services like controllers, if applicable
-builder.Services.AddControllers();  // This is necessary for a Web API
+                services.AddHostedService<TelegramBotService>();
+            })
+            .Build();
 
-// Register TelegramBotService with token from configuration (or directly)
-string telegramBotToken = builder.Configuration["TelegramBotToken"]; // Use configuration or hardcode token
-builder.Services.AddSingleton<TelegramBotService>(new TelegramBotService(telegramBotToken));
+        await builder.RunAsync();
+    }
+}
 
-var app = builder.Build();
-
-// Configure the HTTP request pipeline.
-app.UseHttpsRedirection();
-
-app.UseAuthorization();
-
-app.MapControllers();  // Maps your controller routes if you have any
-
-// Ensure the Telegram bot service starts
-var telegramBotService = app.Services.GetRequiredService<TelegramBotService>();
-
-app.Run();
-
-// TelegramBotService class
-public class TelegramBotService
+public class TelegramBotService : BackgroundService
 {
     private readonly TelegramBotClient _botClient;
+    private readonly IServiceProvider _services;
+    private readonly ILogger<TelegramBotService> _logger;
 
-    public TelegramBotService(string token)
+    public TelegramBotService(TelegramBotClient botClient, IServiceProvider services, ILogger<TelegramBotService> logger)
     {
-        _botClient = new TelegramBotClient(token);
+        _botClient = botClient;
+        _services = services;
+        _logger = logger;
+    }
 
-        // Обработчик обновлений
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Бот запущен и слушает обновления...");
+
         _botClient.StartReceiving(
-            new UpdateType[] { UpdateType.Message }, // Можно фильтровать типы обновлений
-            HandleUpdatesAsync, // Метод для обработки обновлений
-            HandleErrorAsync // Метод для обработки ошибок
+            HandleUpdateAsync,
+            HandleErrorAsync,
+            new ReceiverOptions { AllowedUpdates = Array.Empty<UpdateType>() },
+            stoppingToken
         );
+
+        await Task.Delay(-1, stoppingToken);
     }
 
-    // Асинхронная обработка обновлений
-    private async Task HandleUpdatesAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+    private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
     {
-        if (update.Message != null && update.Message.Type == MessageType.Text)
-        {
-            var chatId = update.Message.Chat.Id;
-            var text = update.Message.Text;
+        if (update.Message is not { Text: { } text }) return;
 
-            // Логика для обработки сообщений
-            if (text.ToLower().Contains("записаться"))
+        var chatId = update.Message.Chat.Id;
+        _logger.LogInformation($"Сообщение от {chatId}: {text}");
+
+        using var scope = _services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<BookingBotDbContext>();
+
+        var master = await dbContext.Masters.FirstOrDefaultAsync(m => m.TelegramId == chatId.ToString(), cancellationToken);
+
+        if (text.ToLower().Contains("регистрация"))
+        {
+            if (master != null)
             {
-                await botClient.SendTextMessageAsync(chatId, "Выберите услугу для записи.");
+                await botClient.SendTextMessageAsync(chatId, "Вы уже зарегистрированы как мастер.", cancellationToken: cancellationToken);
+                return;
             }
-            else
-            {
-                await botClient.SendTextMessageAsync(chatId, "Привет! Напишите 'записаться' для начала.");
-            }
+
+            await botClient.SendTextMessageAsync(chatId, "Введите ваше имя для регистрации:", cancellationToken: cancellationToken);
+            dbContext.Masters.Add(new Master { Name = "", TelegramId = chatId.ToString() });
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return;
         }
+
+        if (master != null && string.IsNullOrEmpty(master.Name))
+        {
+            master.Name = text;
+            dbContext.Masters.Update(master);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await botClient.SendTextMessageAsync(chatId, "Регистрация завершена. Добро пожаловать!", cancellationToken: cancellationToken);
+            return;
+        }
+
+        string response = master == null ? "Вы еще не зарегистрированы. Напишите 'регистрация' для начала." : "Привет!";
+        await botClient.SendTextMessageAsync(chatId, response, cancellationToken: cancellationToken);
     }
 
-    // Обработка ошибок
     private Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
     {
-        Console.WriteLine($"Ошибка: {exception.Message}");
+        _logger.LogError($"Ошибка бота: {exception.Message}");
         return Task.CompletedTask;
-    }
-
-    // Метод для отправки сообщений
-    public async Task SendMessageAsync(long chatId, string message)
-    {
-        await _botClient.SendTextMessageAsync(chatId, message);
     }
 }

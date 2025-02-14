@@ -2,6 +2,7 @@
 using BookingBotAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -10,9 +11,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BookingBotAPI.Migrations
 {
     [DbContext(typeof(BookingBotDbContext))]
-    partial class BookingBotDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250209194034_AddTelegramIdToMaster1")]
+    partial class AddTelegramIdToMaster1
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
