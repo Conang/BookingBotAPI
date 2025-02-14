@@ -12,6 +12,11 @@ using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+using Telegram.Bots.Http;
+using Telegram.Bots.Types;
+using Update = Telegram.Bot.Types.Update;
+using UpdateType = Telegram.Bot.Types.Enums.UpdateType;
 
 public class Program
 {
@@ -96,6 +101,12 @@ public class TelegramBotService : BackgroundService
             return;
         }
 
+        if (master != null && !string.IsNullOrEmpty(master.Name))
+        {
+            ShowServiceManagementButtons(chatId, master);
+            return;
+        }
+
         string response = master == null ? "Вы еще не зарегистрированы. Напишите 'регистрация' для начала." : "Привет!";
         await botClient.SendTextMessageAsync(chatId, response, cancellationToken: cancellationToken);
     }
@@ -104,5 +115,31 @@ public class TelegramBotService : BackgroundService
     {
         _logger.LogError($"Ошибка бота: {exception.Message}");
         return Task.CompletedTask;
+    }
+
+    private void ShowServiceManagementButtons(long chatId, Master master)
+    {
+        var services = master.Services;
+        var inlineKeyboard = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(GetServiceButtons(services));
+
+        _botClient.SendTextMessageAsync(
+            chatId,
+            "Manage your services:",
+            replyMarkup: inlineKeyboard
+        );
+    }
+
+    private IEnumerable<InlineKeyboardButton[]> GetServiceButtons(List<Service> services)
+    {
+        var buttonsList = new List<InlineKeyboardButton[]>();
+        buttonsList.Add(new[] { InlineKeyboardButton.WithCallbackData("Add Service", "add") });
+        buttonsList.Add(new[] { InlineKeyboardButton.WithCallbackData("Return", "return") });
+
+        foreach (var service in services)
+        {
+            buttonsList.Add(new[] { InlineKeyboardButton.WithCallbackData(service.Name, $"edit_{service.Id}") });
+        }
+
+        return buttonsList;
     }
 }
